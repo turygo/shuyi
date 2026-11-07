@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "shuyi"
+version = "0.1.0"
+description = "Preservation-first Chinese reading themes for existing EPUB books"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "lxml>=5.3", "tinycss2>=1.4", "cssselect2>=0.8", "typer>=0.15",
+  "rich>=13.9", "pydantic>=2.10", "openai>=1.60",
+]
+
+[project.scripts]
+shuyi = "shuyi.cli:main"
+
+[dependency-groups]
+dev = ["ruff>=0.11"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shuyi"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

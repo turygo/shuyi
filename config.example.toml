@@ -1,0 +1,4 @@
+[model]
+base_url = "https://api.openai.com/v1"
+name = "your-model"
+api_key_env = "OPENAI_API_KEY"
