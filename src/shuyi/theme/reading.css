@@ -1,0 +1,17 @@
+[data-sy-role="body"] {font-family:"Source Han Serif SC","Noto Serif CJK SC","Songti SC",SimSun,serif;font-size:1.15em;line-height:1.5;text-align:justify;text-indent:2em;margin:1em 0 0}
+[data-sy-role="heading"] {color:#de2432;line-height:1.5;text-indent:0;break-after:avoid;page-break-after:avoid}
+[data-sy-role="heading"][data-sy-level="1"] {font-size:1.6em;font-weight:normal;text-align:center;margin:2em 0 1em}
+[data-sy-role="heading"][data-sy-level="2"] {font-size:1.4em;font-weight:800;text-align:center;margin:2em 0 1.3em}
+[data-sy-role="heading"][data-sy-level="3"] {font-size:1.3em}
+[data-sy-role="heading"][data-sy-level="4"] {font-size:1.2em}
+[data-sy-role="heading"][data-sy-level="5"] {font-size:1.1em}
+[data-sy-role="heading"][data-sy-level="6"] {font-size:1em}
+[data-sy-role="heading"][data-sy-level="3"],[data-sy-role="heading"][data-sy-level="4"],[data-sy-role="heading"][data-sy-level="5"],[data-sy-role="heading"][data-sy-level="6"] {font-weight:normal;text-align:start;text-indent:0;margin:2em 0 1em}
+[data-sy-role="chapter-number"] {font-size:1em;font-weight:normal;color:#de2432;text-align:center;text-indent:0;margin:2em 0 0.5em;break-after:avoid;page-break-after:avoid}
+[data-sy-role="subtitle"],[data-sy-role="caption"] {font-size:1em;text-indent:0}
+[data-sy-role="quote"] {margin:1em 1em 0}
+[data-sy-role="quote-text"] {font-family:"Kaiti SC",KaiTi,STKaiti,serif;font-size:1.15em;line-height:1.4;margin-top:0.5em}
+[data-sy-role="quote-attribution"] {font-size:1em;line-height:1.4;text-align:end;text-indent:0;margin:0.5em 1em 1em}
+[data-sy-role="chapter-summary"] {font-size:1em;line-height:1.5;text-indent:0;margin:1em 0}
+[data-sy-role="table-text"],[data-sy-role="list-text"] {font-size:1em;text-align:start;text-indent:0;margin:0.5em 0}
+[data-sy-role="footnote"],[data-sy-role="endnote"] {font-size:0.9em;line-height:1.4;text-indent:0}
