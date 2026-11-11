@@ -42,6 +42,9 @@ def style_command(
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     css: Annotated[Path | None, typer.Option(help="Custom restricted reading CSS.")] = None,
     reanalyze: Annotated[bool, typer.Option(help="Refresh cached semantic analysis.")] = False,
+    bilingual: Annotated[
+        bool, typer.Option(help="Style confirmed Chinese/English pairs with Chinese first.")
+    ] = False,
     config: Annotated[Path | None, typer.Option(help="Explicit TOML model configuration.")] = None,
 ) -> None:
     _run(
@@ -51,6 +54,7 @@ def style_command(
             css_path=css,
             config_path=config,
             reanalyze=reanalyze,
+            bilingual=bilingual,
             on_progress=lambda message: errors.print(message, markup=False),
         )
     )

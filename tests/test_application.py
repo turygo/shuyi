@@ -158,6 +158,104 @@ class TestApplication(unittest.TestCase):
         self.assertIn("model_config_missing", styled.output)
         self.assertFalse(source.with_name("book.shuyi.epub").exists())
 
+    def test_bilingual_cli_preserves_unpaired_content_and_cached_identity(self) -> None:
+        source = build_epub(
+            self.root / "parallel.epub",
+            documents={
+                "book.xhtml": document(
+                    '<h1 data-bilingual="target">双语标题</h1>'
+                    '<h1 data-bilingual="source">Parallel heading</h1>'
+                    '<p data-bilingual="target">正文包含<em>原有强调</em>。</p>'
+                    '<p data-bilingual="source">Prose with <em>original emphasis</em>.</p>'
+                    '<p lang="en">Independent bibliography entry.</p>'
+                )
+            },
+        )
+        with (
+            patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.cache)}),
+            patch("shuyi.application.configured_classifier", return_value=self.classifier),
+        ):
+            result = CliRunner().invoke(app, ["style", str(source), "--bilingual"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["bilingual"])
+        self.assertEqual(report["content_counts"], {"target": 2, "source": 2})
+        self.assertEqual(report["unpaired_nodes"], 1)
+        with zipfile.ZipFile(report["output"]) as archive:
+            root = etree.fromstring(archive.read("book.xhtml"))
+            content = root.xpath('//*[local-name()="body"]/*')
+            self.assertEqual(
+                [node.get("data-sy-content") for node in content],
+                ["target", "source", "target", "source", None],
+            )
+            self.assertEqual(dict(content[-1].attrib), {"lang": "en"})
+            self.assertEqual(content[3][0].text, "original emphasis")
+        calls = list(self.classifier.calls)
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.root / "no-config")}, clear=True):
+            cached = application.style(
+                source,
+                self.root / "parallel-cached.epub",
+                bilingual=True,
+                cache_dir=self.cache / "shuyi",
+            )
+        self.assertEqual(self.classifier.calls, calls)
+        self.assertEqual(cached["content_counts"], report["content_counts"])
+        self.assertGreater(cached["cache_hits"], 0)
+        self.assertTrue(application.check(Path(cached["output"]))["generated_theme"])
+
+    def test_bilingual_conflict_is_reported_offline_and_never_published(self) -> None:
+        source = build_epub(
+            self.root / "conflict.epub",
+            documents={
+                "book.xhtml": document(
+                    '<p data-bilingual="target">中文译文。</p>'
+                    '<p data-bilingual="source" lang="zh">Original English.</p>'
+                )
+            },
+        )
+        inspected = CliRunner().invoke(app, ["inspect", str(source)])
+        self.assertEqual(inspected.exit_code, 0, inspected.output)
+        issues = json.loads(inspected.stdout)["bilingual"]["issues"]
+        conflict = next(issue for issue in issues if issue["code"] == "bilingual_language_conflict")
+        self.assertEqual(conflict["resource"], "book.xhtml")
+        with patch("shuyi.application.configured_classifier", return_value=self.classifier):
+            styled = CliRunner().invoke(app, ["style", str(source), "--bilingual"])
+        self.assertEqual(styled.exit_code, 2)
+        self.assertIn("bilingual_language_conflict", styled.output)
+        self.assertNotIn("Original English", styled.output)
+        self.assertEqual(self.classifier.calls, [])
+        self.assertFalse(source.with_name("conflict.shuyi.epub").exists())
+
+    def test_uncertain_exporter_bibliography_stays_visible_and_is_reported(self) -> None:
+        signature = "opacity:.8;color:#888;font-size:.85em;font-style:italic;margin-top:.2em"
+        source = build_epub(
+            self.root / "bibliography.epub",
+            documents={
+                "book.xhtml": document(
+                    "<p>中文正文。</p>"
+                    f'<p style="{signature}">English reference.</p>'
+                    '<h2 id="letter">A</h2>'
+                    f'<h2 id="uncertain" style="{signature}">A</h2>'
+                )
+            },
+        )
+        report = application.style(
+            source, bilingual=True, classifier=self.classifier, cache_dir=self.cache
+        )
+        self.assertTrue(
+            any(
+                warning.startswith("bilingual_unpaired_reference:book.xhtml:")
+                for warning in report["warnings"]
+            )
+        )
+        with zipfile.ZipFile(report["output"]) as archive:
+            root = etree.fromstring(archive.read("book.xhtml"))
+            for identity in ("letter", "uncertain"):
+                node = root.xpath("//*[@id=$identity]", identity=identity)[0]
+                self.assertIsNone(node.get("data-sy-content"))
+                self.assertEqual(node.text, "A")
+            self.assertEqual(root.xpath('//*[@id="uncertain"]')[0].get("style"), signature)
+
     def test_epubcheck_unavailable_or_failed_is_an_error(self) -> None:
         source = build_epub(self.root / "book.epub")
         with patch("shuyi.application.shutil.which", return_value=None):

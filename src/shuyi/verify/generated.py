@@ -44,14 +44,18 @@ def check_generated_theme(book: Book, asset: str, markers: list, resources: dict
         node_id = node.get("data-sy-node")
         level = node.get("data-sy-level")
         if role is not None:
-            if role not in ROLES or not node_id or node_id in node_ids:
+            if (
+                role not in ROLES
+                or not re.fullmatch(r"n[0-9]{6,}", node_id or "")
+                or node_id in node_ids
+            ):
                 raise ShuyiError("generated_binding_invalid", resource)
             if (role == "heading" and level not in {"1", "2", "3", "4", "5", "6"}) or (
                 role != "heading" and level is not None
             ):
                 raise ShuyiError("generated_binding_invalid", resource)
             node_ids.add(node_id)
-            if node.get("data-sy-content") != "target":
+            if node.get("data-sy-content") not in {"target", "source", "mixed"}:
                 raise ShuyiError("generated_binding_invalid", resource)
         elif node_id is not None or level is not None or node.get("data-sy-content") is not None:
             raise ShuyiError("generated_binding_invalid", resource)

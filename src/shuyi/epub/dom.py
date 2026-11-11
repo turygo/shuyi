@@ -14,6 +14,45 @@ MATHML = "http://www.w3.org/1998/Math/MathML"
 PROTECTED_TAGS = frozenset(
     {"nav", "pre", "code", "svg", "math", "script", "style", "form", "rt", "rp", "rtc"}
 )
+INLINE_TEXT_TAGS = frozenset(
+    {
+        "a",
+        "abbr",
+        "b",
+        "bdi",
+        "bdo",
+        "br",
+        "cite",
+        "em",
+        "i",
+        "mark",
+        "q",
+        "ruby",
+        "s",
+        "small",
+        "span",
+        "strong",
+        "sub",
+        "sup",
+        "u",
+        "wbr",
+    }
+)
+
+
+def has_direct_text(node: etree._Element) -> bool:
+    if (node.text or "").strip():
+        return True
+    for child in node:
+        if (child.tail or "").strip():
+            return True
+        if (
+            isinstance(child.tag, str)
+            and etree.QName(child).localname in INLINE_TEXT_TAGS
+            and "".join(child.itertext()).strip()
+        ):
+            return True
+    return False
 
 
 def parse_xml(data: bytes, resource: str) -> etree._Element:

@@ -2,16 +2,25 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
 
 import cssselect2
 import tinycss2
 from lxml import etree
 
 from shuyi.contracts import Book, ElementPath, ShuyiError, ThemePlan
+from shuyi.epub.bilingual import is_exporter_reference
 from shuyi.epub.css_values import SAFE_PROPERTIES, validate_css_value
-from shuyi.epub.dom import XHTML, element_path, parse_xml
+from shuyi.epub.dom import XHTML, element_path, is_protected, parse_xml
 from shuyi.epub.package import resolve_href
+from shuyi.epub.reference_css import (
+    compile_reference_selector,
+    first_letter_base,
+    reference_block,
+    validate_first_letter,
+)
+from shuyi.epub.source_conditions import dynamic_property
+from shuyi.epub.source_css import CSSRule, parse_source_rules, source_selectors
+from shuyi.epub.source_dynamics import validate_source_dynamics
 
 NOTE_PROPERTIES = frozenset({"display", "width", "height", "min-width"})
 STATIC_PSEUDOS = frozenset(
@@ -35,13 +44,6 @@ STATIC_PSEUDOS = frozenset(
     }
 )
 DARK_MEDIA = frozenset({"(prefers-color-scheme: dark)", "(prefers-color-scheme: light)"})
-
-
-@dataclass(frozen=True)
-class CSSRule:
-    selector: str
-    declarations: tuple[tuple[str, str, bool], ...]
-    condition: str = ""
 
 
 def declarations(text: str) -> tuple[tuple[str, str, bool], ...]:
@@ -70,7 +72,9 @@ def compile_selector(selector: str) -> list[cssselect2.compiler.CompiledSelector
         raise ShuyiError("css_selector_invalid") from exc
 
 
-def validate_value(name: str, value: str, *, note: bool = False) -> None:
+def validate_value(name: str, value: str, *, note: bool = False, reference: bool = False) -> None:
+    if name == "opacity" and reference and value == "1":
+        return
     if name not in SAFE_PROPERTIES and not (note and name in NOTE_PROPERTIES):
         raise ShuyiError("css_property_unsupported")
 
@@ -107,20 +111,21 @@ def validate_value(name: str, value: str, *, note: bool = False) -> None:
 def parse_rules(
     text: str, *, custom: bool = False, condition: str = "", generated: bool = False
 ) -> tuple[CSSRule, ...]:
+    if not custom and not generated:
+        return parse_source_rules(text, condition=condition)
     result = []
     for item in tinycss2.parse_stylesheet(text, skip_comments=True, skip_whitespace=True):
         if item.type == "qualified-rule":
             selector = tinycss2.serialize(item.prelude).strip()
-            compile_selector(selector)
+            if generated and not custom and first_letter_base(selector) is not None:
+                compile_reference_selector(selector)
+            else:
+                compile_selector(selector)
             values = declarations(tinycss2.serialize(item.content))
             if custom:
                 for name, value, _ in values:
                     validate_value(name, value)
-            if any(
-                name in {"animation", "animation-name", "transition", "all"}
-                or name.startswith(("animation-", "transition-"))
-                for name, _, _ in values
-            ):
+            if any(name == "all" or dynamic_property(name) for name, _, _ in values):
                 raise ShuyiError("css_cascade_unsupported")
             result.append(CSSRule(selector, values, condition))
         elif item.type == "at-rule":
@@ -128,19 +133,9 @@ def parse_rules(
             prelude = tinycss2.serialize(item.prelude).strip()
             if name == "namespace":
                 raise ShuyiError("css_namespace_unsupported")
-            if not (custom or generated) and name in {"page", "font-face", "charset"}:
-                continue
-            if (
-                name != "media"
-                or item.content is None
-                or ((custom or generated) and prelude not in DARK_MEDIA)
-            ):
+            if name != "media" or item.content is None or prelude not in DARK_MEDIA:
                 raise ShuyiError("css_at_rule_unsupported")
             if condition:
-                raise ShuyiError("css_condition_unsupported")
-            if not custom and not re.fullmatch(
-                r"(?:all|screen|print|\(prefers-color-scheme:\s*(?:dark|light)\))", prelude
-            ):
                 raise ShuyiError("css_condition_unsupported")
             result.extend(
                 parse_rules(
@@ -174,8 +169,6 @@ def source_rules(book: Book, resource: str, root: etree._Element) -> tuple[CSSRu
         else:
             continue
         media = node.get("media", "").strip()
-        if media and media not in {"all", "screen", "print", *DARK_MEDIA}:
-            raise ShuyiError("css_condition_unsupported", resource)
         rules.extend(parse_rules(text, condition=media))
     return tuple(rules)
 
@@ -185,18 +178,26 @@ def matching_rules(
 ) -> dict[ElementPath, tuple[CSSRule, ...]]:
     matcher = cssselect2.Matcher()
     for index, rule in enumerate(rules):
-        for selector in compile_selector(rule.selector):
+        selectors = (
+            source_selectors(rule.source_selector, rule.namespaces)
+            if rule.source_selector
+            else compile_reference_selector(rule.selector)
+            if first_letter_base(rule.selector) is not None
+            else compile_selector(rule.selector)
+        )
+        for selector in selectors:
             matcher.add_selector(selector, (index, rule))
     result = {}
     for wrapper in cssselect2.ElementWrapper.from_xml_root(root).iter_subtree():
         result[element_path(root, wrapper.etree_element)] = tuple(
-            payload[1] for _, _, _, payload in matcher.match(wrapper)
+            payload[1] for _, _, pseudo, payload in matcher.match(wrapper) if pseudo is None
         )
     return result
 
 
 def style_evidence(book: Book, resource: str, root: etree._Element) -> dict[ElementPath, str]:
     matches = matching_rules(root, source_rules(book, resource, root))
+    validate_source_dynamics(root, matches)
     result = {}
     for node in root.iter():
         if not isinstance(node.tag, str):
@@ -204,7 +205,15 @@ def style_evidence(book: Book, resource: str, root: etree._Element) -> dict[Elem
         evidence = []
         for ancestor in [*reversed(list(node.iterancestors())), node]:
             path = element_path(root, ancestor)
-            records = [(rule.selector, rule.condition, rule.declarations) for rule in matches[path]]
+            records = [
+                (
+                    rule.source_selector or rule.selector,
+                    rule.condition,
+                    rule.declarations,
+                    rule.namespaces,
+                )
+                for rule in matches[path]
+            ]
             inline = ancestor.get("style", "")
             if inline:
                 declarations(inline)
@@ -218,7 +227,7 @@ def style_evidence(book: Book, resource: str, root: etree._Element) -> dict[Elem
 def specificity_guard(book: Book, resource: str, root: etree._Element) -> int:
     maximum = 0
     for rule in source_rules(book, resource, root):
-        for selector in compile_selector(rule.selector):
+        for selector in source_selectors(rule.source_selector or rule.selector, rule.namespaces):
             maximum = max(maximum, selector.specificity[0])
     if maximum >= 128:
         raise ShuyiError("css_specificity_limit", resource)
@@ -323,7 +332,7 @@ def validate_inline_demotion(before: str, after: str, properties: set[str]) -> N
 
 
 def validate_generated_css(book: Book, plan: ThemePlan, output_book: Book) -> None:
-    from shuyi.epub.dom import is_protected, resolve_element
+    from shuyi.epub.dom import resolve_element
     from shuyi.epub.notes import find_note_markers
 
     try:
@@ -350,33 +359,39 @@ def validate_generated_css(book: Book, plan: ThemePlan, output_book: Book) -> No
             if resource in book.protected or is_protected(node):
                 raise ShuyiError("generated_css_protected", resource)
             selector = f'[data-sy-node="{binding.node_id}"]' + ":not(#shuyi-never)" * guard
-            allowed[selector] = False
+            allowed[selector] = (False, binding.content == "source" and binding.exporter)
+            if binding.content == "source" and reference_block(node):
+                allowed[selector + "::first-letter"] = (False, False)
         for (location, path), (index, marker) in notes.items():
             if location == resource:
                 base = f'[data-sy-note-id="note{index:06d}"][data-sy-note-kind="{marker.kind}"]'
                 selector = base + ":not(#shuyi-never)" * guard
-                allowed[selector] = True
+                allowed[selector] = (True, False)
                 node = resolve_element(root, path)
                 for child in node.iterdescendants():
                     if isinstance(child.tag, str) and etree.QName(child).localname == "sup":
                         suffix = "".join(
                             f" > :nth-child({i + 1})" for i in element_path(node, child)
                         )
-                        allowed[base + suffix + ":not(#shuyi-never)" * guard] = True
+                        allowed[base + suffix + ":not(#shuyi-never)" * guard] = (True, False)
     for rule in rules:
         if rule.selector not in allowed:
             raise ShuyiError("generated_css_selector_invalid")
         if rule.condition and rule.condition not in DARK_MEDIA:
             raise ShuyiError("generated_css_condition_invalid")
+        if first_letter_base(rule.selector) is not None:
+            if rule.condition:
+                raise ShuyiError("generated_css_reference_invalid")
+            validate_first_letter(rule.declarations)
+            continue
         for name, value, important in rule.declarations:
             if not important:
                 raise ShuyiError("generated_css_priority_invalid")
-            validate_value(name, value, note=allowed[rule.selector])
+            note, reference = allowed[rule.selector]
+            validate_value(name, value, note=note, reference=reference)
 
 
 def validate_standalone_css(book: Book, asset_path: str) -> None:
-    from shuyi.epub.dom import is_protected
-
     try:
         rules = parse_rules(book.entries[asset_path].decode("utf-8"), generated=True)
     except (KeyError, UnicodeError) as exc:
@@ -404,7 +419,15 @@ def validate_standalone_css(book: Book, asset_path: str) -> None:
                 selector = (
                     f'[data-sy-node="{node.get("data-sy-node")}"]' + ":not(#shuyi-never)" * guard
                 )
-                allowed[selector] = False
+                content_kind = node.get("data-sy-content")
+                if content_kind not in {"target", "source", "mixed"}:
+                    raise ShuyiError("generated_binding_invalid", resource)
+                allowed[selector] = (
+                    False,
+                    content_kind == "source" and is_exporter_reference(node),
+                )
+                if content_kind == "source" and reference_block(node):
+                    allowed[selector + "::first-letter"] = (False, False)
             kind = node.get("data-sy-note-kind")
             if kind:
                 if kind not in {"noteref", "backlink"} or is_protected(node):
@@ -413,17 +436,23 @@ def validate_standalone_css(book: Book, asset_path: str) -> None:
                 if not re.fullmatch(r"note[0-9]{6,}", content):
                     raise ShuyiError("generated_css_note_invalid", resource)
                 base = f'[data-sy-note-id="{content}"][data-sy-note-kind="{kind}"]'
-                allowed[base + ":not(#shuyi-never)" * guard] = True
+                allowed[base + ":not(#shuyi-never)" * guard] = (True, False)
                 for child in node.iterdescendants():
                     if isinstance(child.tag, str) and etree.QName(child).localname == "sup":
                         suffix = "".join(
                             f" > :nth-child({i + 1})" for i in element_path(node, child)
                         )
-                        allowed[base + suffix + ":not(#shuyi-never)" * guard] = True
+                        allowed[base + suffix + ":not(#shuyi-never)" * guard] = (True, False)
     for rule in rules:
         if rule.selector not in allowed or (rule.condition and rule.condition not in DARK_MEDIA):
             raise ShuyiError("generated_css_selector_invalid")
+        if first_letter_base(rule.selector) is not None:
+            if rule.condition:
+                raise ShuyiError("generated_css_reference_invalid")
+            validate_first_letter(rule.declarations)
+            continue
         for name, value, important in rule.declarations:
             if not important:
                 raise ShuyiError("generated_css_priority_invalid")
-            validate_value(name, value, note=allowed[rule.selector])
+            note, reference = allowed[rule.selector]
+            validate_value(name, value, note=note, reference=reference)

@@ -4,8 +4,14 @@ from dataclasses import asdict
 
 from lxml import etree
 
-from shuyi.contracts import Book, Inventory, LayoutNode
-from shuyi.epub.dom import element_path, is_protected, node_digest, parse_xml
+from shuyi.contracts import Book, ContentBinding, Inventory, LayoutNode
+from shuyi.epub.bilingual import (
+    content_context,
+    find_bilingual,
+    is_exporter_reference,
+    require_bilingual,
+)
+from shuyi.epub.dom import element_path, has_direct_text, is_protected, node_digest, parse_xml
 from shuyi.epub.styles import style_evidence
 from shuyi.layout.protocol import VERSION, canonical, fingerprint
 
@@ -26,30 +32,6 @@ NATIVE = frozenset(
         "dt",
         "dd",
         "figcaption",
-    }
-)
-INLINE = frozenset(
-    {
-        "a",
-        "abbr",
-        "b",
-        "bdi",
-        "bdo",
-        "br",
-        "cite",
-        "em",
-        "i",
-        "mark",
-        "q",
-        "ruby",
-        "s",
-        "small",
-        "span",
-        "strong",
-        "sub",
-        "sup",
-        "u",
-        "wbr",
     }
 )
 CONTAINERS = frozenset(
@@ -92,22 +74,32 @@ def candidate(node: etree._Element) -> bool:
         return False
     if name.localname not in NATIVE | CONTAINERS:
         return False
-    direct = bool((node.text or "").strip())
-    for child in node:
-        if not isinstance(child.tag, str):
-            direct = direct or bool((child.tail or "").strip())
-            continue
-        local = etree.QName(child).localname
-        if local in INLINE and visible_text(child).strip():
-            direct = True
-        direct = direct or bool((child.tail or "").strip())
-    return direct
+    return has_direct_text(node)
 
 
-def document_nodes(book: Book, resource: str, start: int) -> list[LayoutNode]:
+def document_nodes(
+    book: Book,
+    resource: str,
+    start: int,
+    *,
+    bilingual: bool = False,
+    bindings: tuple[ContentBinding, ...] = (),
+) -> list[LayoutNode]:
     root = parse_xml(book.entries[resource], resource)
     css = style_evidence(book, resource, root)
-    candidates = [node for node in root.iter() if candidate(node)]
+    roots = {binding.path for binding in bindings}
+    source_scopes = tuple(binding.path for binding in bindings if binding.content == "source")
+    candidates = []
+    for node in root.iter():
+        if candidate(node):
+            candidates.append(node)
+        elif bilingual and isinstance(node.tag, str) and not is_protected(node):
+            path = element_path(root, node)
+            if path in roots or (
+                is_exporter_reference(node)
+                and any(path[: len(scope)] == scope for scope in source_scopes)
+            ):
+                candidates.append(node)
     result = []
     for index, node in enumerate(candidates):
         path = element_path(root, node)
@@ -115,7 +107,13 @@ def document_nodes(book: Book, resource: str, start: int) -> list[LayoutNode]:
         source_css = css.get(path, "")
         before = visible_text(candidates[index - 1])[-500:] if index else ""
         after = visible_text(candidates[index + 1])[:500] if index + 1 < len(candidates) else ""
-        group = fingerprint({"node": features(node), "ancestors": ancestors, "css": source_css})
+        identity = content_context(root, path, bindings, bilingual=bilingual)
+        signature = {"node": features(node), "ancestors": ancestors, "css": source_css}
+        if bilingual:
+            signature["content"] = {
+                key: value for key, value in identity.items() if key != "pair_id"
+            }
+        group = fingerprint(signature)
         result.append(
             LayoutNode(
                 node_id=f"n{start + index:06d}",
@@ -129,21 +127,39 @@ def document_nodes(book: Book, resource: str, start: int) -> list[LayoutNode]:
                 ancestors=ancestors,
                 source_css=source_css,
                 group_key=group,
+                **identity,
             )
         )
     return result
 
 
-def build_inventory(book: Book) -> Inventory:
+def build_inventory(book: Book, *, bilingual: bool = False) -> Inventory:
+    bindings: tuple[ContentBinding, ...] = ()
+    warnings = list(book.warnings)
+    if bilingual:
+        report = find_bilingual(book)
+        require_bilingual(report)
+        bindings = report.bindings
+        warnings.extend(
+            f"{issue.code}:{issue.resource}:{'.'.join(map(str, issue.path))}"
+            for issue in report.issues
+        )
     nodes: list[LayoutNode] = []
     for resource in book.documents:
         if resource not in book.protected:
-            nodes.extend(document_nodes(book, resource, len(nodes) + 1))
+            resource_bindings = tuple(item for item in bindings if item.resource == resource)
+            nodes.extend(
+                document_nodes(
+                    book, resource, len(nodes) + 1, bilingual=bilingual, bindings=resource_bindings
+                )
+            )
     digest = fingerprint(
         {
             "version": VERSION,
             "source_sha256": book.source_sha256,
+            "bilingual": bilingual,
+            "content": [asdict(binding) for binding in bindings],
             "nodes": [asdict(node) for node in nodes],
         }
     )
-    return Inventory(book.source_sha256, digest, tuple(nodes), book.warnings)
+    return Inventory(book.source_sha256, digest, tuple(nodes), tuple(warnings), bilingual, bindings)

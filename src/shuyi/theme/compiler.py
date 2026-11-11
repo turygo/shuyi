@@ -3,8 +3,10 @@ from __future__ import annotations
 from importlib.resources import files
 
 from shuyi.contracts import AttributeEdit, ShuyiError
-from shuyi.epub.dom import element_path
+from shuyi.epub.dom import element_path, has_direct_text, resolve_element
+from shuyi.epub.reference_css import FIRST_LETTER_RESET
 from shuyi.epub.styles import demote_inline, matching_rules, parse_rules
+from shuyi.theme.reference import reference_rules
 
 NOTE_CSS = (
     "display:inline-block;width:1.8em;min-width:1.8em;height:1.8em;padding:0;"
@@ -33,7 +35,9 @@ def emit_rule(selector, values, condition=""):
     return "@media " + condition + "{" + result + "}\n" if condition else result
 
 
-def compile_document(resource, root, bindings, rules, guard, attributes):
+def compile_document(
+    resource, root, bindings, rules, guard, attributes, *, builtin=True, first_letters=frozenset()
+):
     matches = matching_rules(root, rules)
     output = []
     for binding in bindings:
@@ -41,19 +45,35 @@ def compile_document(resource, root, bindings, rules, guard, attributes):
             continue
         path = binding.path
         matched = matches[path]
+        node = resolve_element(root, path)
+        # 行内文本与纯作用域容器不重复应用整段字号和几何。
+        if (
+            builtin
+            and binding.content != "source"
+            and (binding.flow == "inline" or binding.role == "body" and not has_direct_text(node))
+        ):
+            matched = ()
         selector = f'[data-sy-node="{binding.node_id}"]' + ":not(#shuyi-never)" * guard
         unconditional = set()
         conditional = set()
-        for priority in (False, True):
-            for rule in matched:
-                for name, value, important in rule.declarations:
-                    if priority != important:
-                        continue
-                    output.append(emit_rule(selector, {name: value}, rule.condition))
-                    (conditional if rule.condition else unconditional).add(name)
-        from shuyi.epub.dom import resolve_element
+        if builtin and binding.content == "source":
+            from shuyi.epub.styles import validate_value
 
-        node = resolve_element(root, path)
+            for condition, values in reference_rules(binding, node, bindings):
+                for name, value in values.items():
+                    validate_value(name, value, reference=binding.content == "source")
+                output.append(emit_rule(selector, values, condition))
+                (conditional if condition else unconditional).update(values)
+            if path in first_letters:
+                output.append(emit_rule(selector + "::first-letter", dict(FIRST_LETTER_RESET)))
+        else:
+            for priority in (False, True):
+                for rule in matched:
+                    for name, value, important in rule.declarations:
+                        if priority != important:
+                            continue
+                        output.append(emit_rule(selector, {name: value}, rule.condition))
+                        (conditional if rule.condition else unconditional).add(name)
         before = node.get("style")
         if before:
             after = demote_inline(before, unconditional)

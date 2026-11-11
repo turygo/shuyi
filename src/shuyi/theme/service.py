@@ -17,6 +17,7 @@ from shuyi.contracts import (
     TextEdit,
     ThemePlan,
 )
+from shuyi.epub.bilingual import content_context, find_bilingual, require_bilingual
 from shuyi.epub.dom import (
     OPF,
     XHTML,
@@ -28,7 +29,8 @@ from shuyi.epub.dom import (
     serialize_xml,
 )
 from shuyi.epub.notes import find_note_markers, label_fields
-from shuyi.epub.styles import specificity_guard
+from shuyi.epub.reference_css import first_letter_paths
+from shuyi.epub.styles import source_rules, specificity_guard
 from shuyi.theme.compiler import compile_document, compile_note, theme_rules
 
 RESERVED = frozenset(
@@ -87,12 +89,24 @@ def admitted_bindings(book, inventory, profile, roots):
         inventory.source_sha256 != book.source_sha256
         or profile.source_sha256 != book.source_sha256
         or profile.inventory_digest != inventory.digest
+        or type(inventory.bilingual) is not bool
     ):
         raise ShuyiError("theme_profile_mismatch")
     ids = {node.node_id for node in inventory.nodes}
     if len(ids) != len(inventory.nodes) or set(profile.assignments) != ids:
         raise ShuyiError("theme_profile_mismatch")
     result = []
+    content = find_bilingual(book) if inventory.bilingual else None
+    if content is not None:
+        require_bilingual(content)
+        if inventory.content != content.bindings:
+            raise ShuyiError("theme_profile_mismatch")
+    content_by_resource = {
+        resource: tuple(item for item in content.bindings if item.resource == resource)
+        if content is not None
+        else ()
+        for resource in roots
+    }
     locations = set()
     for candidate in inventory.nodes:
         assignment = profile.assignments[candidate.node_id]
@@ -108,11 +122,21 @@ def admitted_bindings(book, inventory, profile, roots):
         node = resolve_element(roots[candidate.resource], candidate.path)
         if node_digest(node) != candidate.source_sha256:
             raise ShuyiError("theme_node_digest_mismatch", candidate.resource)
+        context = content_context(
+            roots[candidate.resource],
+            candidate.path,
+            content_by_resource[candidate.resource],
+            bilingual=inventory.bilingual,
+        )
+        if any(
+            type(getattr(candidate, name)) is not bool for name in ("content_root", "exporter")
+        ) or any(getattr(candidate, name) != value for name, value in context.items()):
+            raise ShuyiError("theme_node_identity_mismatch", candidate.resource)
         location = (candidate.resource, candidate.path)
         if location in locations:
             raise ShuyiError("theme_node_duplicate")
         locations.add(location)
-        if assignment.role is None:
+        if assignment.role is None or candidate.content == "unpaired":
             continue
         if candidate.resource in book.protected or is_protected(node):
             raise ShuyiError("theme_node_protected", candidate.resource)
@@ -130,6 +154,7 @@ def admitted_bindings(book, inventory, profile, roots):
                 candidate.source_sha256,
                 assignment.role,
                 assignment.level,
+                **context,
             )
         )
     return tuple(result)
@@ -231,6 +256,16 @@ def plan_theme(
         marker.resource for marker in find_note_markers(book)
     }
     guards = {resource: specificity_guard(book, resource, roots[resource]) for resource in affected}
+    first_letters = (
+        {
+            resource: first_letter_paths(
+                roots[resource], source_rules(book, resource, roots[resource])
+            )
+            for resource in affected
+        }
+        if inventory.bilingual and css is None
+        else {}
+    )
     rules = theme_rules(css)
     attributes, texts, generated = [], [], []
     for binding in bindings:
@@ -239,7 +274,7 @@ def plan_theme(
         for name, value in [
             ("data-sy-node", binding.node_id),
             ("data-sy-role", binding.role),
-            ("data-sy-content", "target"),
+            ("data-sy-content", binding.content),
         ]:
             set_attribute(binding.resource, root, node, name, value, attributes)
         if binding.level is not None:
@@ -250,7 +285,14 @@ def plan_theme(
         if resource in affected:
             generated.extend(
                 compile_document(
-                    resource, roots[resource], bindings, rules, guards[resource], attributes
+                    resource,
+                    roots[resource],
+                    bindings,
+                    rules,
+                    guards[resource],
+                    attributes,
+                    builtin=css is None,
+                    first_letters=first_letters.get(resource, frozenset()),
                 )
             )
     note_css, note_count = apply_notes(book, roots, guards, attributes, texts, css is None)
@@ -273,4 +315,5 @@ def plan_theme(
         note_count,
         sum(item.role is None for item in profile.assignments.values()),
         warnings,
+        inventory.bilingual,
     )

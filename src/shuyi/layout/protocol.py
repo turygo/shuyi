@@ -7,7 +7,7 @@ from hashlib import sha256
 
 from shuyi.contracts import ROLES, Assignment, ClassificationBatch, LayoutNode, ShuyiError
 
-VERSION = "shuyi-layout-v1"
+VERSION = "shuyi-layout-v2"
 MAX_CHARACTERS = 24_000
 MAX_OBSERVATIONS = 16
 SYSTEM_PROMPT = (
@@ -16,7 +16,9 @@ SYSTEM_PROMPT = (
     "do not infer semantics from class names alone. Return only a JSON object with "
     "observations, containing exactly one {id,role,level} per requested id. "
     "Allowed roles: " + ", ".join(sorted(ROLES)) + ". Unknown role is null. "
-    "Only heading has integer level 1..6; every other level is null."
+    "Only heading has integer level 1..6; every other level is null. "
+    "Content identity is not a semantic role. Exporter-added gray or italic reference "
+    "formatting alone does not make source content a quotation."
 )
 
 

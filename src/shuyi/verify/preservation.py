@@ -11,8 +11,9 @@ from shuyi.contracts import Book, ShuyiError, ThemePlan
 from shuyi.epub.archive import load_book
 from shuyi.epub.dom import OPF, XHTML, canonical_document, parse_xml
 from shuyi.epub.package import check_references, manifest_resources, resolve_href
+from shuyi.epub.reference_css import first_letter_base
 from shuyi.epub.styles import validate_generated_css
-from shuyi.verify.edits import reverse_edits
+from shuyi.verify.edits import reverse_edits, validate_bindings
 from shuyi.verify.metadata import reverse_modified
 
 
@@ -37,6 +38,8 @@ def css_properties(output: Book, asset: str) -> dict[tuple[str, tuple[int, ...]]
         if rule.type != "qualified-rule":
             continue
         selector = tinycss2.serialize(rule.prelude).strip()
+        if first_letter_base(selector) is not None:
+            continue
         match = re.match(r'^\[data-sy-(node|note-id)="([^"]+)"\]', selector)
         if match is None or match.groups() not in addresses:
             raise ShuyiError("verification_css_address_invalid")
@@ -129,6 +132,7 @@ def verify_output(book: Book, output: Path, plan: ThemePlan) -> dict[str, object
         if data != plan.replacements.get(resource, book.entries.get(resource)):
             raise ShuyiError("verification_bytes_changed", resource)
     validate_plan_counts(book, plan)
+    validate_bindings(book, plan)
     validate_generated_css(book, plan, result)
     roots = reverse_edits(book, result, plan, css_properties(result, plan.asset_path))
     reverse_document_assets(book, plan, roots)

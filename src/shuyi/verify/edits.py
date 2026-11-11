@@ -5,6 +5,7 @@ import re
 from lxml import etree
 
 from shuyi.contracts import Book, ShuyiError, ThemePlan
+from shuyi.epub.bilingual import content_context, find_bilingual, require_bilingual
 from shuyi.epub.dom import EPUB, is_protected, node_digest, parse_xml, resolve_element
 from shuyi.epub.notes import find_note_markers, label_fields, semantics
 from shuyi.epub.styles import validate_inline_demotion
@@ -14,6 +15,17 @@ def validate_bindings(book: Book, plan: ThemePlan) -> dict[tuple[str, tuple[int,
     bindings = {}
     node_ids = set()
     roots = {}
+    if type(plan.bilingual) is not bool:
+        raise ShuyiError("verification_binding_invalid")
+    content = find_bilingual(book) if plan.bilingual else None
+    if content is not None:
+        require_bilingual(content)
+    content_by_resource = {
+        resource: tuple(item for item in content.bindings if item.resource == resource)
+        if content is not None
+        else ()
+        for resource in book.documents
+    }
     from shuyi.contracts import ROLES
 
     for binding in plan.bindings:
@@ -37,6 +49,20 @@ def validate_bindings(book: Book, plan: ThemePlan) -> dict[tuple[str, tuple[int,
         root = roots[binding.resource]
         node = resolve_element(root, binding.path)
         if is_protected(node) or node_digest(node) != binding.source_sha256:
+            raise ShuyiError("verification_binding_invalid", binding.resource)
+        context = content_context(
+            root,
+            binding.path,
+            content_by_resource[binding.resource],
+            bilingual=plan.bilingual,
+        )
+        if (
+            binding.content == "unpaired"
+            or any(
+                type(getattr(binding, name)) is not bool for name in ("content_root", "exporter")
+            )
+            or any(getattr(binding, name) != value for name, value in context.items())
+        ):
             raise ShuyiError("verification_binding_invalid", binding.resource)
         bindings[key] = binding
         node_ids.add(binding.node_id)
@@ -63,7 +89,7 @@ def admit_attribute(
             and after == str(binding.level)
         )
     if name == "data-sy-content":
-        return binding is not None and before is None and after == "target"
+        return binding is not None and before is None and after == binding.content
     if name == "data-sy-note-kind":
         return marker is not None and before is None and after == marker.kind
     if name == "data-sy-note-id":
@@ -165,7 +191,7 @@ def reverse_edits(
         if (
             node.get("data-sy-node") != binding.node_id
             or node.get("data-sy-role") != binding.role
-            or node.get("data-sy-content") != "target"
+            or node.get("data-sy-content") != binding.content
             or node.get("data-sy-level")
             != (str(binding.level) if binding.level is not None else None)
         ):

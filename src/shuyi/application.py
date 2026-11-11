@@ -10,6 +10,7 @@ from pathlib import Path
 from shuyi.config import configured_classifier, default_cache_dir, load_config
 from shuyi.contracts import Classifier, Progress, ShuyiError
 from shuyi.epub.archive import load_book, write_book
+from shuyi.epub.bilingual import find_bilingual
 from shuyi.layout.analysis import analyze
 from shuyi.layout.inventory import build_inventory
 from shuyi.theme.service import plan_theme
@@ -19,6 +20,7 @@ from shuyi.verify.preservation import check_book, verify_output
 def inspect_book(source: Path) -> dict[str, object]:
     book = load_book(source.expanduser())
     inventory = build_inventory(book)
+    bilingual = find_bilingual(book)
     return {
         "source": str(book.source_path),
         "source_sha256": book.source_sha256,
@@ -28,6 +30,19 @@ def inspect_book(source: Path) -> dict[str, object]:
         "protected_documents": sorted(book.protected),
         "candidates": len(inventory.nodes),
         "groups": len({node.group_key for node in inventory.nodes}),
+        "bilingual": {
+            "pairs": len({binding.pair_id for binding in bilingual.bindings}),
+            "source_nodes": sum(binding.content == "source" for binding in bilingual.bindings),
+            "target_nodes": sum(binding.content == "target" for binding in bilingual.bindings),
+            "inline_sources": sum(
+                binding.content == "source" and binding.flow == "inline"
+                for binding in bilingual.bindings
+            ),
+            "issues": [
+                {"code": issue.code, "resource": issue.resource, "path": list(issue.path)}
+                for issue in bilingual.issues
+            ],
+        },
         "warnings": list(dict.fromkeys((*book.warnings, *inventory.warnings))),
     }
 
@@ -93,6 +108,7 @@ def style(
     css_path: Path | None = None,
     config_path: Path | None = None,
     reanalyze: bool = False,
+    bilingual: bool = False,
     classifier: Classifier | None = None,
     cache_dir: Path | None = None,
     on_progress: Progress | None = None,
@@ -108,7 +124,7 @@ def style(
             custom_css = css_path.read_bytes()
         except OSError:
             raise ShuyiError("theme_unreadable") from None
-    inventory = build_inventory(book)
+    inventory = build_inventory(book, bilingual=bilingual)
     selected = (
         classifier if classifier is not None else configured_classifier(load_config(config_path))
     )
@@ -132,6 +148,9 @@ def style(
         **report,
         "output": str(destination),
         "source_sha256": book.source_sha256,
+        "bilingual": bilingual,
+        "content_counts": dict(Counter(binding.content for binding in plan.bindings)),
+        "unpaired_nodes": sum(node.content == "unpaired" for node in inventory.nodes),
         "role_counts": dict(Counter(plan.role_counts)),
         "note_markers": plan.note_count,
         "unknown_nodes": plan.unknown_count,

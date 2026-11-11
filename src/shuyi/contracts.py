@@ -49,6 +49,29 @@ class Book:
 
 
 @dataclass(frozen=True)
+class ContentBinding:
+    resource: str
+    path: ElementPath
+    content: Literal["source", "target"]
+    pair_id: str
+    flow: Literal["block", "inline"]
+    exporter: bool = False
+
+
+@dataclass(frozen=True)
+class ContentIssue:
+    resource: str
+    path: ElementPath
+    code: str
+
+
+@dataclass(frozen=True)
+class BilingualReport:
+    bindings: tuple[ContentBinding, ...]
+    issues: tuple[ContentIssue, ...] = ()
+
+
+@dataclass(frozen=True)
 class LayoutNode:
     node_id: str
     resource: str
@@ -61,6 +84,11 @@ class LayoutNode:
     ancestors: str
     source_css: str
     group_key: str
+    content: str = "target"
+    content_root: bool = False
+    pair_id: str | None = None
+    flow: str = "block"
+    exporter: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,6 +97,8 @@ class Inventory:
     digest: str
     nodes: tuple[LayoutNode, ...]
     warnings: tuple[str, ...] = ()
+    bilingual: bool = False
+    content: tuple[ContentBinding, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -135,6 +165,11 @@ class StyledNode:
     source_sha256: str
     role: str
     level: int | None
+    content: str = "target"
+    content_root: bool = False
+    pair_id: str | None = None
+    flow: str = "block"
+    exporter: bool = False
 
 
 @dataclass(frozen=True)
@@ -150,3 +185,4 @@ class ThemePlan:
     note_count: int
     unknown_count: int
     warnings: tuple[str, ...] = ()
+    bilingual: bool = False

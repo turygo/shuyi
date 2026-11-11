@@ -44,14 +44,23 @@ class TestLiveAcceptance(unittest.TestCase):
             config = str(model_config)
             del selected, platform
         config_args = ["--config", config] if config else []
+        bilingual = os.environ.get("SHUYI_TEST_BILINGUAL") == "1"
+        mode_args = ["--bilingual"] if bilingual else []
         first_path = directory / "styled.epub"
         first = self.run_cli(
-            ["style", str(source), "-o", str(first_path), *config_args],
+            ["style", str(source), "-o", str(first_path), *mode_args, *config_args],
             environment,
             directory / "first",
         )
         self.assertEqual(first["source_sha256"], source_hash)
         self.assertGreater(sum(first["role_counts"].values()), 0)
+        self.assertEqual(first["bilingual"], bilingual)
+        if bilingual:
+            self.assertGreater(first["content_counts"].get("source", 0), 0)
+            self.assertGreater(
+                first["content_counts"].get("target", 0) + first["content_counts"].get("mixed", 0),
+                0,
+            )
         self.run_cli(["check", str(first_path)], environment, directory / "check")
         from shuyi.config import load_config
 
@@ -71,13 +80,16 @@ class TestLiveAcceptance(unittest.TestCase):
         config_args = ["--config", str(cached_config)]
         second_path = directory / "cached.epub"
         second = self.run_cli(
-            ["style", str(source), "-o", str(second_path), *config_args],
+            ["style", str(source), "-o", str(second_path), *mode_args, *config_args],
             environment,
             directory / "cached",
         )
         self.assertGreater(second["cache_hits"], 0)
         self.assertEqual(first["role_counts"], second["role_counts"])
         self.assertEqual(first["analysis_provenance"], second["analysis_provenance"])
+        self.assertEqual(first["content_counts"], second["content_counts"])
+        self.assertEqual(first["unpaired_nodes"], second["unpaired_nodes"])
+        self.assertEqual(second["bilingual"], bilingual)
         self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), source_hash)
         evidence = {
             "input": str(source),

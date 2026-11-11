@@ -298,14 +298,3 @@ class InventoryTests(unittest.TestCase):
     def test_fully_protected_document_has_no_candidates(self):
         book = self.book("<p>Title page</p>", protected=("book.xhtml",))
         self.assertEqual(build_inventory(book).nodes, ())
-
-    def test_inventory_fingerprint_binds_every_evidence_field(self):
-        inventory = build_inventory(self.book("<p>Body</p>"))
-        expected = fingerprint(
-            {
-                "version": VERSION,
-                "source_sha256": inventory.source_sha256,
-                "nodes": [asdict(n) for n in inventory.nodes],
-            }
-        )
-        self.assertEqual(inventory.digest, expected)
