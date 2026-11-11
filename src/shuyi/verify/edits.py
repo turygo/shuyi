@@ -183,5 +183,5 @@ def note_text_fields(markers: dict, source_roots: dict) -> dict:
             continue
         anchor = resolve_element(root, key[1])
         for index, (node, field) in enumerate(label_fields(anchor)):
-            allowed[(key[0], element_path(root, node), field)] = "注" if index == 0 else ""
+            allowed[(key[0], element_path(root, node), field)] = "注" if index == 0 else None
     return allowed

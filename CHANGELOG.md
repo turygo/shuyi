@@ -10,3 +10,7 @@
 - Independent reversible change verification, bounded archive safety, non-overwriting publication, and optional EPUBCheck integration.
 - Executable offline/real-book acceptance harness, architecture gates, CI, source distribution, and wheel packaging.
 - Private TOML `model.api_key` credentials with redacted representations, strict single-source selection, and credential-free cached acceptance even when the initial configuration contains a literal key.
+
+### Fixed
+
+- Serialize removed multipart note-label text/tails as absent XML values, retaining nested markup and reciprocal links without weakening independent edit verification.

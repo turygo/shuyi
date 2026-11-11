@@ -160,7 +160,7 @@ def apply_notes(book, roots, guards, attributes, texts, builtin):
             raise ShuyiError("theme_note_label_invalid", marker.resource)
         for position, (owner, field) in enumerate(fields):
             before = getattr(owner, field)
-            after = "注" if position == 0 else ""
+            after = "注" if position == 0 else None
             if before != after:
                 texts.append(
                     TextEdit(marker.resource, element_path(root, owner), field, before, after)

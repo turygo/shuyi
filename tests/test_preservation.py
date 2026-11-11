@@ -185,6 +185,24 @@ class PreservationTests(unittest.TestCase):
         self.assertIsNotNone(anchor.find("{http://www.w3.org/1999/xhtml}sup"))
         self.assertEqual(plan.note_count, 2)
 
+    def test_split_note_label_uses_serializable_empty_fields_without_losing_links(self):
+        book, plan = self.planned(
+            body='<p>Body<a id="ref" href="#note" epub:type="noteref">'
+            "[<sup>12</sup>]</a> after.</p>"
+            '<aside id="note" epub:type="footnote"><a href="#ref">↩</a> Note.</aside>'
+        )
+        output = self.output(book, plan)
+        verify_output(book, output, plan)
+        root = parse_xml(load_book(output).entries["book.xhtml"], "book.xhtml")
+        anchor = root.xpath('//*[@id="ref"]')[0]
+        self.assertEqual("".join(anchor.itertext()), "注")
+        self.assertEqual(anchor.get("href"), "#note")
+        self.assertEqual(anchor.tail, " after.")
+        self.assertEqual(len(anchor), 1)
+        self.assertIsNone(anchor[0].text)
+        self.assertIsNone(anchor[0].tail)
+        self.assertEqual(root.xpath('//*[@id="note"]')[0][0].get("href"), "#ref")
+
     def test_unlisted_reserved_attribute_cannot_be_smuggled_into_plan(self):
         book, plan = self.planned()
         binding = plan.bindings[0]
